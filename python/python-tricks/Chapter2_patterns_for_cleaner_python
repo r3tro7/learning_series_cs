@@ -1,0 +1,210 @@
+# Patterns for Cleaner Python
+
+**Source Material:** *Python Tricks: The Book* by Dan Bader (Chapter 2)
+**Focus:** Writing code that is not just functional, but "Pythonic"—clean, readable, and maintainable.
+
+- - -
+
+## 2.1 Assertions
+
+Assertions are often misunderstood. They are not for handling runtime errors (like "File not found"); they are for **internal self-checks** to declare conditions that should generally be impossible.
+
+### Key Concept
+
+If an assertion fails, it means there is a **bug** in your code, not an error in the user's input.
+
+### Syntax
+
+``` python
+# The syntax
+assert expression1, expression2
+
+# Translates roughly to:
+if __debug__:
+    if not expression1:
+        raise AssertionError(expression2)
+```
+
+### Critical Caveats
+
+**1\. The Security Risk \(Optimization\)**
+Assertions can be globally disabled by running Python with the `-O` (optimize) flag. When this happens, all assert statements are stripped from the bytecode.
+
+* **Danger:** If you use `assert` to check admin privileges, an attacker can bypass your security simply by running the script with `-O`.
+
+**2\. The Tuple Trap**
+Never wrap your assertion parameters in parentheses.
+
+* **Bad:** `assert (1 == 2, "This fails")`
+    * *Result:* This assertion **passes** (does not raise an error) because Python interprets it as a non-empty tuple, which is always "truthy."
+* **Good:** `assert 1 == 2, "This fails"`
+
+- - -
+
+## 2.2 Complacent Comma Placement
+
+When defining lists, dictionaries, or sets that span multiple lines, **always** add a trailing comma to the last item.
+
+### Why?
+
+1. **Cleaner Diffs:** If you add a new item later, you don't modify the existing last line. This keeps version control history clean.
+2. **Prevents String Concatenation Bugs:** Python automatically merges adjacent string literals that are not separated by a comma.
+
+**The "Missing Comma" Bug:**
+
+``` python
+names = [
+    'Alice',
+    'Bob'    # <--- Missing comma here!
+    'Jane'
+]
+print(names)
+# Output: ['Alice', 'BobJane']
+```
+
+**The Fix:**
+
+``` python
+names = [
+    'Alice',
+    'Bob',
+    'Jane', # <--- Trailing comma prevents future errors
+]
+```
+
+- - -
+
+## 2.3 Context Managers (`with` Statement)
+
+The `with` statement simplifies resource management (files, locks, database connections). It ensures resources are acquired and released properly, even if exceptions occur.
+
+### The Pattern
+
+Instead of manually writing `try...finally` blocks to close files, use `with`.
+
+**Writing Your Own Context Manager:**
+You can make any class support the `with` statement by implementing two "dunder" (double underscore) methods:
+
+1. `__enter__`: Logic to acquire the resource.
+2. `__exit__`: Logic to release the resource (and handle exceptions).
+
+``` python
+class ManagedFile:
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        self.file = open(self.name, 'w')
+        return self.file
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.file:
+            self.file.close()
+
+# Usage
+with ManagedFile('hello.txt') as f:
+    f.write('hello, world!')
+```
+
+**Pro Tip:** Use `contextlib.contextmanager` to quickly turn a generator function into a context manager without writing a full class.
+
+- - -
+
+## 2.4 Underscores, Dunders, and More
+
+Python relies heavily on naming conventions using underscores to indicate scope and behavior.
+
+| Pattern | Meaning | Behavior |
+| :------ | :------ | :------- |
+| `_var` | **Internal Use.** | A hint to programmers that this variable/method is for internal use. Not enforced by Python, but `from m import *` will ignore names starting with `_`. |
+| `var_` | **Keyword Evasion.** | Used to avoid naming conflicts with Python keywords (e.g., naming a variable `class_` because `class` is reserved). |
+| `__var` | **Name Mangling.** | When used inside a class, the interpreter rewrites this attribute to `_ClassName__var` to prevent naming collisions in subclasses. |
+| `__var__` | **Magic Methods.** | Special methods used by the language (e.g., `__init__`, `__call__`). **Never** invent your own dunder names; stick to the ones Python defines. |
+| `_` | **Throwaway.** | Convention for temporary variables you don't care about (e.g., `for _ in range(10)`). In the REPL, `_` stores the result of the last expression. |
+
+- - -
+
+Here is the updated Markdown for **Section 2.5**, expanded with the specific security context and a concrete exploit example derived from the book.
+
+You can replace the existing "2.5 String Formatting" section with this block:
+
+- - -
+
+## 2.5 String Formatting: The Rule of Thumb
+
+Python has evolved four distinct ways to format strings.
+
+1. **Old Style:** `'Hello %s' % name` (Avoid)
+2. **New Style:** `'Hello {}'.format(name)` (Okay)
+3. **f-strings (Python 3.6+):** `f'Hello {name}'` (Best for performance & readability)
+4. **Template Strings:** `Template('Hello $name')` (Best for security)
+
+### The Decision Matrix
+
+**Scenario A: User-Supplied Format Strings**
+If your program accepts format strings from users (e.g., translation files or user-customizable output), \**always use Template Strings*
+
+* **The Security Risk:** More complex formatting methods (like `str.format`) allow format strings to access arbitrary attributes of objects. A malicious user can abuse this to traverse the object graph and access global variables, potentially leaking sensitive information like API keys or passwords.
+* **Why Template Strings are Safer:** They are a simpler mechanism that does not allow format specifiers or arbitrary attribute access, effectively closing this attack vector.
+
+#### The "Format String Exploit" Example
+
+Here is how an attacker can leak a global `SECRET` variable using the standard `.format()` method, and how `Template` prevents it:
+
+``` python
+# The setup: A sensitive global variable and a class available in the context
+SECRET = 'this-is-a-secret'
+class Error:
+    def __init__(self):
+        pass
+err = Error()
+
+# 1. THE ATTACK
+# A malicious user supplies a format string that traverses the object
+# to reach the global namespace:
+user_input = '{error.__init__.__globals__[SECRET]}'
+
+# .format() executes the traversal and leaks the secret:
+print(user_input.format(error=err))
+# Output: 'this-is-a-secret'
+
+# 2. THE FIX
+from string import Template
+# Template strings treat the input as literal text or simple keys only.
+# This attempts to interpret the attack string safely:
+try:
+    Template(user_input).substitute(error=err)
+except ValueError as e:
+    print(f"Attack blocked: {e}")
+# Output: Attack blocked: Invalid placeholder in string...
+```
+
+**Scenario B: Developer-Controlled Strings**
+If you (the developer) are writing the string literal, use **f-strings**.
+
+* **Why?** They are faster, more readable, and handle inline arithmetic.
+
+``` python
+# Safe, readable approach for developer-defined strings:
+name = 'Bob'
+errno = 50159747054
+print(f"Hey {name}, there's a {errno:#x} error!")
+# Output: Hey Bob, there's a 0xbadcoffee error!
+```
+
+- - -
+
+## 2.6 The Zen of Python
+
+Python includes a hidden "Easter egg" that lays out the design philosophy of the language.
+
+Run this in your REPL:
+
+``` python
+import this
+```
+
+**Key Takeaways:**
+
+> "Explicit is better than implicit."
+> "Readability counts."
